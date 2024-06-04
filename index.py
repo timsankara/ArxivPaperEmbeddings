@@ -2,8 +2,8 @@ from flask import Flask, request, jsonify
 import json
 import boto3
 from botocore.exceptions import NoCredentialsError
-import openai
-import os
+from openai import OpenAI
+from dotenv import load_dotenv, dotenv_values
 from arxiv_api import ArxivAPI  # Import the ArxivAPI class from the package
 
 
@@ -11,24 +11,30 @@ from arxiv_api import ArxivAPI  # Import the ArxivAPI class from the package
 app = Flask(__name__)
 
 # Set OpenAI API key
-openai.api_key = os.getenv('OPENAI_API_KEY')
+load_dotenv()
+config = dotenv_values(".env")
 
+client = OpenAI(api_key=config['OPENAI_API_KEY'])
 # Initialize DynamoDB client with AWS credentials from environment variables
-aws_access_key_id = os.getenv('AWS_ACCESS_KEY_ID')
-aws_secret_access_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+ACCESS_KEY = config['AWS_ACCESS_KEY_ID']
+SECRET_KEY = config['AWS_SECRET_ACCESS_KEY']
 
 # Initialize DynamoDB client with AWS credentials
-dynamodb = boto3.client('dynamodb', region_name='us-east-1', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key)
+dynamodb_client = boto3.client(
+    'dynamodb',
+    aws_access_key_id=ACCESS_KEY,
+    aws_secret_access_key=SECRET_KEY,
+    region_name='us-east-1' # change to preffered region
+)
 
 # Define the name of the DynamoDB table
-TABLE_NAME = 'EmbeddingsTable'  # Change to your DynamoDB table name
-
+TABLE_NAME = ''  # Change to your DynamoDB table name
 
 # Function to save embeddings to DynamoDB
 def save_to_dynamodb(embeddings):
     try:
         # Put embeddings into DynamoDB table
-        response = dynamodb.put_item(
+        dynamodb_client.put_item(
             TableName=TABLE_NAME,
             Item={
                 'embedding_id': {'S': embeddings['id']},
@@ -39,18 +45,13 @@ def save_to_dynamodb(embeddings):
     except NoCredentialsError:
         return False  # Return False if authentication fails
     except Exception as e:
-        print(e)
         return False
-
-@app.route('/', methods=['GET'])
-def test():
-    return "Hello World!"
 
 @app.route('/get-arxiv-papers', methods=['GET'])
 def get_arxiv_papers():
     try:
-        category = "cs.AI"
-        max_results = 10
+        category = "cs.AI" # change to preffered category
+        max_results = 10 # change to required number of papers
 
         # If max_results is not provided, set a default value
         if max_results is None:
@@ -75,17 +76,14 @@ def get_arxiv_papers():
 def create_embedding_from_body():
     try:
         body = request.get_json()
-        data = openai.Embedding.create(
-            model="text-embedding-ada-002",
-            input=body['input']
-        )
+
+        embeddings = client.embeddings.create(input = [body['input']], model='text-embedding-ada-002').data[0].embedding
+
         # Save embeddings to DynamoDB
-        if save_to_dynamodb(data):
-            return jsonify({'message': 'Embeddings saved to DynamoDB successfully'})
-        else:
-            return jsonify({'error': 'Failed to save embeddings to DynamoDB. Authentication error.'})
+        save_to_dynamodb(embeddings)
+
+        return jsonify({'message': 'Embeddings saved to DynamoDB successfully'})
     except Exception as e:
-        print(e)
         return jsonify({'error': str(e)})
 
 # Run the Flask app
